@@ -81,3 +81,67 @@ def clean_example(example: dict[str, Any], tokenizer) -> tuple[dict[str, Any] | 
         "num_codes": len(extract_codes_from_text(target_text)),
         "had_label_mismatch": bool(normalized_output,normalized_icd_code, normalized_icd_code != normalized_output ),
     }
+    return cleaned , None
+
+def materialize_clean_dataset(raw_split: Dataset, tokenizer) -> tuple[Dataset, dict[str,int]]: 
+    seen_ids : set[str] = set()
+    stats: Counter[str] = Counter()
+
+    def generator() -> Iterable[dict[str, Any]]:
+        for example in tqdm(raw_split, desc="Cleaning dataset", total=len(raw_split)):
+            stats['rows_seen'] += 1
+            cleaned , skip_reason = clean_example(example, tokenizer)
+            if cleaned is None:
+                stats[skip_reason or "unknown_skip_reason"] += 1
+                continue
+            if cleaned['example_id'] in seen_ids :
+                stats['duplicate_rows'] += 1
+                continue
+            seen_ids.add(cleaned["example_id"])
+            stats["rows_kept"] += 1
+            if cleaned["had_label_mismatch"]:
+                stats["label_mismatches"] += 1
+            yield cleaned
+
+    clean_dataset = Dataset.from_generator(generator, features=CLEAN_FEATURES)
+    return clean_dataset, stats
+
+def split_dataset(clean_dataset: Dataset, data_config: DataConfig) -> DatasetDict:
+
+    if round(data_config.train_ratio + data_config.test_ratio + data_config.val_ratio, 6) != 1.0:
+        raise ValueError("Train/val/test ratios must sum to 1.0.") 
+    
+    LOGGER.info(
+        "Splitting cleaned dataset with ratios train=%.3f val=%.3f test=%.3f.",
+        data_config.train_ratio,
+        data_config.test_ratio,
+        data_config.val_ratio
+    )
+
+    initial = clean_dataset.train_test_split(
+        test_size = data_config.test_ratio + data_config.val_ratio,
+        seed = data_config.seed,
+        shuffle = True,
+    )
+
+    holdout = initial["test"].train_test_split(
+        test_size= data_config.test_ratio / (data_config.test_ratio + data_config.val_ratio),
+        seed = data_config.seed,
+        shuffle = True,
+    )
+    return DatasetDict(
+        {
+            "train":initial["train"],
+            "test":holdout["train"],
+            "validation":holdout["test"],
+        }
+    )
+
+def build_dataset_report(
+        raw_dataset: Dataset,
+        clean_dataset: Dataset,
+        split_data_dict : DatasetDict,
+        tokenizer,
+        stats: dict[str, int],
+        sample_size: int
+) -> dict[str, Any]:
