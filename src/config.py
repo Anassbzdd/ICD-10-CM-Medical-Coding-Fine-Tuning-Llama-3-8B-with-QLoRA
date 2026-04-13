@@ -1,3 +1,5 @@
+"""Shared configuration objects and defaults for the ICD-10 QLoRA project."""
+
 from __future__ import annotations
 
 from pathlib import Path

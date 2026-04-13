@@ -1,3 +1,5 @@
+"""Prompt builders for Llama 3 ICD-10 completion training and inference."""
+
 from __future__ import annotations
 
 from transformers import PreTrainedTokenizerBase
