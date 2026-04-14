@@ -1,4 +1,5 @@
 """Tokenizer, quantization, and LoRA model-loading helpers."""
+
 from __future__ import annotations
 
 import os
@@ -85,7 +86,7 @@ def load_model_for_inference(model_config: ModelConfig, adapter_path: str | os.P
         device_map = "auto" ,
         attn_implementation= model_config.attn_implementation
     )
-    model = PeftModel.from_pretrained(base_model, adapter_path)
+    model = PeftModel.from_pretrained(base_model, adapter_path)             
     model.eval()
     return model
 

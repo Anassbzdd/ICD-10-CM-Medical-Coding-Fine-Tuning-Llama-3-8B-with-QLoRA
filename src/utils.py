@@ -102,3 +102,4 @@ def resolve_resume_checkpoint(output_dir: str | Path, resume_value: Optional[str
     if resume_value.lower in {"auto", "latest"}:
         return latest_checkpoint(output_dir)
     return resume_value
+
