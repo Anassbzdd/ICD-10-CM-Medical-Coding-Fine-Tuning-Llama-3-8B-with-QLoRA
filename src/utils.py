@@ -14,7 +14,7 @@ from typing import Any, Iterable, Optional
 
 def setup_logging(level:str = "INFO") -> None:
     """Configure project-wide logging with a compact, timestamped format."""
-    numeric_level = getattr(logging, level.upper(), "INFO")
+    numeric_level = getattr(logging, level.upper(), logging.INFO)
     logging.basicConfig(
         level= numeric_level,
         format= "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -89,17 +89,56 @@ def latest_checkpoint(output_dir: str | Path) -> Optional[str]:
     for checkpoint_dir in root.glob("checkpoint-*"):
         step = checkpoint_dir.name.split('-')[-1]
         if step.isdigit():
-            candidates.append(int(step), checkpoint_dir)
-        if not candidates:
-            return None
-        return str(max(candidates, key=lambda item: item[0])[1])
+            candidates.append((int(step), checkpoint_dir))
+    if not candidates:
+        return None
+    return str(max(candidates, key=lambda item: item[0])[1])
     
 def resolve_resume_checkpoint(output_dir: str | Path, resume_value: Optional[str]):
     """Resolve an explicit checkpoint path or discover the latest checkpoint."""
 
     if resume_value is None:
         return None
-    if resume_value.lower in {"auto", "latest"}:
+    if resume_value.lower() in {"auto", "latest"}:
         return latest_checkpoint(output_dir)
     return resume_value
 
+def compute_percentiles(values: list[int | float], percentiles: tuple[int, ...] = (50,90,95,99)) -> dict[str,float] :
+    """Compute simple percentile summaries without introducing extra dependencies."""
+
+    if not values:
+        return {}
+    ordered = sorted(values)
+    results: dict[str,float] = {}
+    for percentile in percentiles:
+        index = min(len(ordered) - 1,round((percentile/100)*(len(ordered) - 1)))
+        results[f"p{percentile}"] = float(ordered[index])
+    return results
+    
+def summarize_numeric(values: list[int|float]) -> dict[str,float]:
+    """Return descriptive statistics for a numeric series."""
+
+    if not values:
+        return {}
+    summary = {
+        "count": float(len(values)),
+        "min" : float(min(values)),
+        "max" : float(max(values)),
+        "mean" : float(sum(values) / len(values))
+    }
+    summary.update(compute_percentiles(values))
+    return summary
+
+def detect_compute_environment() -> dict[str, Any]:
+    """Report GPU availability to make hardware assumptions explicit in logs."""
+
+    gpu_names = []
+    if torch.cuda.is_available():
+        for index in range(torch.cuda.device_count()):
+            gpu_names.append(torch.cuda.get_device_name(index))
+    return {
+        "cuda_available" : torch.cuda.is_available(),
+        "num_gpus" : torch.cuda.device_count(),
+        "gpu_names" : gpu_names,
+        "bf16_supported" : bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+    }
