@@ -14,6 +14,7 @@ from typing import Any, Iterable, Optional
 
 def setup_logging(level:str = "INFO") -> None:
     """Configure project-wide logging with a compact, timestamped format."""
+    
     numeric_level = getattr(logging, level.upper(), logging.INFO)
     logging.basicConfig(
         level= numeric_level,

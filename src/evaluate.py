@@ -92,3 +92,85 @@ def main() -> None:
 
     args = parse_args()
     setup_logging(args.log_level)
+
+    model_config = ModelConfig(
+        model_name=args.model_name,
+        tokenizer_name=args.tokenizer_name,
+        cache_dir=args.cache_dir,
+        max_seq_length=args.max_seq_length,
+    )
+
+    tokenizer = get_tokenizer(model_config)
+    model = load_model_for_inference(model_config, args.adapter_path)
+
+    dataset_dict = load_from_disk(str(args.processed_dir))
+    dataset = dataset_dict[args.split]
+    if args.max_samples is not None:
+        dataset = dataset.select(range(min(len(dataset), args.max_samples)))
+    LOGGER.info("Evaluating %d rows from split '%s'.",len(dataset), args.split)
+
+    if not args.no_wandb:
+        wandb.init(
+            project= args.wandb_project,
+            entity = args.wandb_entity,
+            name = args.run_name,
+            job_type="evaluation",
+            config={
+                "split": args.split,
+                "batch_size": args.batch_size,
+                "max_new_tokens": args.max_new_tokens,
+                "adapter_path": str(args.adapter_path),
+            }
+        )
+    
+    prompts = dataset["prompt_text"]
+    references = dataset["target_text"]
+    predictions: list[str] = []
+
+    for start_index in tqdm(range(0,len(dataset),args.batch_size), desc="Generating predictions"):
+        stop_index = min(start_index + args.batch_size , len(dataset))
+        batch_prompts = prompts[start_index:stop_index]
+        batch_predictions = batched_generate(
+            model=model,
+            tokenizer=tokenizer,
+            prompts= batch_prompts,
+            max_seq_length=model_config.max_seq_length,
+            max_new_tokens= args.max_new_tokens,
+            temperature=args.temperature,
+            top_p = args.top_p,
+            do_sample=args.do_sample,
+            num_beams=args.num_beams,
+        )
+        predictions.extend(batch_predictions)
+    
+    metrics = aggregate_metrics(predictions=predictions, references=references)
+    LOGGER.info("Evaluation metrics: %s", metrics)
+
+    prediction_rows = [
+        {
+            "example_id":dataset[index]["example_id"],
+            "prompt_text":dataset[index]["prompt_text"],
+            "reference": references[index],
+            "prediction": predictions[index],
+        }
+        for index in range(len(dataset))
+    ]
+
+    ensure_dir(args.output_path.parent)
+    save_jsonl(prediction_rows, args.output_path)
+    save_json(
+        {
+            "split":args.split,
+            "metrics":metrics,
+            "adapter_path":str(args.adapter_path),
+            "num_examples":len(predictions),
+        },
+        args.output_path.with_suffix(".metrics.json"),
+    )
+
+    if not args.no_wandb and wandb.run is not None:
+        wandb.log(metrics)
+        wandb.finish()
+
+if __name__ == "__main__":
+    main()
