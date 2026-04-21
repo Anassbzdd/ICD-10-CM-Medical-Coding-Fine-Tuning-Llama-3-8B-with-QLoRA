@@ -90,7 +90,7 @@ def load_model_for_inference(model_config: ModelConfig, adapter_path: str | os.P
     model.eval()
     return model
 
-def get_terminal_token_ids(tokenizer: AutoTokenizer) -> list[int]:
+def get_terminator_token_ids(tokenizer: AutoTokenizer) -> list[int]:
     token_ids = [tokenizer.eos_token_id]
     eot_token_id = tokenizer.convert_tokens_to_ids(LLAMA3_EOT_TOKEN)
     if eot_token_id is not None and eot_token_id not in token_ids:
