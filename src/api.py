@@ -33,7 +33,7 @@ class PredictResponse(BaseModel):
     """Response schema for ICD-10 prediction."""
 
     raw_prediction:str
-    normalizd_prediction:str
+    normalized_prediction:str
     codes: list[str]
 
 def build_model_config_from_env() -> tuple[ModelConfig, Path]:
@@ -42,10 +42,10 @@ def build_model_config_from_env() -> tuple[ModelConfig, Path]:
     if adapter_path is None:
         raise ValueError("ADAPTER_PATH environment variable is required.")
     model_config = ModelConfig(
-        model_name= os.environ.get("MODEL_NAME",ModelConfig.model_name),
-        tokenizer_name=os.environ.get("TOKENIZER_NAME",ModelConfig.tokenizer_name),
-        cache_dir=os.environ.get("CACHE_DIR",ModelConfig.cache_dir),
-        max_seq_length=os.environ.get("MAX_SEQ_LENGTH",ModelConfig.max_seq_length),
+        model_name= os.environ.get("MODEL_NAME",ModelConfig().model_name),
+        tokenizer_name=os.environ.get("TOKENIZER_NAME",ModelConfig().tokenizer_name),
+        cache_dir=os.environ.get("CACHE_DIR",ModelConfig().cache_dir),
+        max_seq_length=int(os.environ.get("MAX_SEQ_LENGTH",ModelConfig().max_seq_length)),
     )
     return model_config, Path(adapter_path)
 
@@ -60,7 +60,7 @@ async def lifespan(_:FastAPI):
     finally:
         PREDICTOR = None
 
-app = FastAPI(title= "ICD-10 QLoRA API", version="1.0.0", lifespan= "lifespan")
+app = FastAPI(title= "ICD-10 QLoRA API", version="1.0.0", lifespan= lifespan)
 
 @app.get("/health")
 def health() -> dict[str,str]:
@@ -72,7 +72,7 @@ def predict(request: PredictorRequest) -> PredictResponse:
         raise HTTPException(status_code=503, detail="Model is still loading.")
     prediction = PREDICTOR.predict(
         clinical_note = request.note,
-        instruction = request.isinstance,
+        instruction = request.instruction,
         max_new_tokens = request.max_new_tokens,
         temperature = request.temperature,
         top_p = request.top_p,
@@ -81,8 +81,8 @@ def predict(request: PredictorRequest) -> PredictResponse:
     )
     return PredictResponse(
         raw_prediction = str(prediction["raw_prediction"]),
-        normalizd_prediction = str(prediction["normalizd_prediction"]),
-        codes = str(prediction["codes"]),
+        normalized_prediction = str(prediction["normalized_prediction"]),
+        codes = list(prediction["codes"]),
     )
 
 def parse_args() -> argparse.Namespace:
@@ -106,11 +106,11 @@ def main() -> None:
 
     args = parse_args()
     setup_logging(args.log_level)
-    os.environ["ADAPTER_PATH"] = args.adapter_path
+    os.environ["ADAPTER_PATH"] = str(args.adapter_path)
     os.environ["MODEL_NAME"] = args.model_name
     os.environ["CACHE_DIR"] = args.cache_dir
     os.environ["TOKENIZER_NAME"] = args.tokenizer_name
-    os.environ["MAX_SEQ_LENGTH"] = args.max_seq_length
+    os.environ["MAX_SEQ_LENGTH"] = str(args.max_seq_length)
 
     uvicorn.run(
         "src.api:app",
