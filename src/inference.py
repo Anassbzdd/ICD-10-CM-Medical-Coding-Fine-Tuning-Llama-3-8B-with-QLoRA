@@ -143,23 +143,23 @@ def main() -> None:
         LOGGER.info("Saved %d predictions to %s.", len(outputs), args.output_jsonl)
         return
         
-        if args.note_file is not None:
-            clinical_note = args.note_file.read_text(encoding= "utf-8")
-        elif args.note is not None:
-            clinical_note = args.note
-        else:
-            raise ValueError("Provide either --note, --note_file, or --input_jsonl.")
+    if args.note_file is not None:
+        clinical_note = args.note_file.read_text(encoding= "utf-8")
+    elif args.note is not None:
+        clinical_note = args.note
+    else:
+        raise ValueError("Provide either --note, --note_file, or --input_jsonl.")
         
-        prediction = predictor.predict(
-                clinical_note= clinical_note,
-                instruction= args.instruction,
-                max_new_tokens= args.max_new_tokens,
-                temperature= args.temperature,
-                top_p= args.top_p,
-                do_sample= args.do_sample,
-                num_beams= args.num_beams
-        )
-        print(json.dumps(prediction, indent=2))
+    prediction = predictor.predict(
+            clinical_note= clinical_note,
+            instruction= args.instruction,
+            max_new_tokens= args.max_new_tokens,
+            temperature= args.temperature,
+            top_p= args.top_p,
+            do_sample= args.do_sample,
+            num_beams= args.num_beams
+    )
+    print(json.dumps(prediction, indent=2))
         
 
 if __name__ == "__main__":

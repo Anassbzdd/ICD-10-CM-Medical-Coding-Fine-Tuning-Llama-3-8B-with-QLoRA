@@ -121,4 +121,4 @@ class ApiConfig:
     host:str = "0.0.0.0"
     port:int = 8000
     workers:int = 1
-    log_level:str = "INFO"
+    log_level:str = "info"

@@ -108,8 +108,10 @@ def main() -> None:
     setup_logging(args.log_level)
     os.environ["ADAPTER_PATH"] = str(args.adapter_path)
     os.environ["MODEL_NAME"] = args.model_name
-    os.environ["CACHE_DIR"] = args.cache_dir
-    os.environ["TOKENIZER_NAME"] = args.tokenizer_name
+    if args.cache_dir is not None:
+        os.environ["CACHE_DIR"] = args.cache_dir
+    if args.tokenizer_name is not None:
+        os.environ["TOKENIZER_NAME"] = args.tokenizer_name
     os.environ["MAX_SEQ_LENGTH"] = str(args.max_seq_length)
 
     uvicorn.run(
