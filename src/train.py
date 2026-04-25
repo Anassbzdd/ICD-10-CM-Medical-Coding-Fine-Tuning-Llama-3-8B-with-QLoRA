@@ -245,6 +245,8 @@ def main() -> None:
         )
 
     tokenizer = get_tokenizer(model_config)
+    if len(train_dataset) == 0:
+        raise ValueError("Training dataset is empty after filtering/limiting. Check preprocessing or --max_train_samples.")
     validate_response_template(tokenizer , train_dataset[0]["text"] , model_config.response_template)
     model = load_model_for_training(model_config)
     data_collator = DataCollatorForCompletionOnlyLM(
