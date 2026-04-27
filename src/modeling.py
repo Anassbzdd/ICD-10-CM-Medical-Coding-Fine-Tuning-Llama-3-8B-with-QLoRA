@@ -25,13 +25,12 @@ def get_tokenizer(model_config: ModelConfig) -> AutoTokenizer:
     tokenizer.padding_side = "right"
     return tokenizer
 
-def build_quantization_config() -> BitsAndBytesConfig:
+def build_quantization_config(bf16:bool = True) -> BitsAndBytesConfig:
 
     return BitsAndBytesConfig(
         load_in_4bit= True,
-        bnb_4bit_compute_dtype= torch.bfloat16,
         bnb_4bit_quant_type= "nf4",
-        bnb_4bit_use_double_quant=True,
+        bnb_4bit_compute_dtype=torch.bfloat16 if bf16 else torch.float16,
     )
 
 def build_lora_config(model_config : ModelConfig) -> LoraConfig:
