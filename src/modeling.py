@@ -25,12 +25,13 @@ def get_tokenizer(model_config: ModelConfig) -> AutoTokenizer:
     tokenizer.padding_side = "right"
     return tokenizer
 
-def build_quantization_config(bf16:bool = True) -> BitsAndBytesConfig:
+def build_quantization_config() -> BitsAndBytesConfig:
 
     return BitsAndBytesConfig(
         load_in_4bit= True,
         bnb_4bit_quant_type= "nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16 if bf16 else torch.float16,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_compute_dtype=torch.float16,
     )
 
 def build_lora_config(model_config : ModelConfig) -> LoraConfig:
@@ -62,6 +63,7 @@ def load_model_for_training(model_config: ModelConfig) -> AutoModelForCausalLM:
         device_map=_resolve_device_map(),
         attn_implementation=model_config.attn_implementation,
         trust_remote_code=model_config.trust_remote_code,
+        torch_dtype=torch.float16,
     )
     model.config.use_cache = False
     if model_config.gradient_checkpointing:
@@ -71,6 +73,9 @@ def load_model_for_training(model_config: ModelConfig) -> AutoModelForCausalLM:
         use_gradient_checkpointing=model_config.gradient_checkpointing,
     )
     lora_model = get_peft_model(model, build_lora_config(model_config))
+    for _, param in lora_model.named_parameters():
+        if param.requires_grad:
+            param.data = param.data.to(torch.float32)
     lora_model.print_trainable_parameters()
     return lora_model
 
@@ -83,7 +88,8 @@ def load_model_for_inference(model_config: ModelConfig, adapter_path: str | os.P
         trust_remote_code = model_config.trust_remote_code,
         quantization_config = build_quantization_config(),
         device_map = "auto" ,
-        attn_implementation= model_config.attn_implementation
+        attn_implementation= model_config.attn_implementation,
+        torch_dtype=torch.float16,
     )
     model = PeftModel.from_pretrained(base_model, adapter_path)             
     model.eval()

@@ -87,6 +87,11 @@ class TrainingConfig:
     max_eval_samples:Optional[int] = 2048
     ddp_find_unused_parameters:bool = False
     resume_from_checkpoint:Optional[str] = None
+    push_to_hub: bool = False
+    hub_model_id: Optional[str] = None
+    hub_private_repo: bool = True
+    hub_strategy: str = "checkpoint"
+    hub_always_push: bool = False
 
 
 

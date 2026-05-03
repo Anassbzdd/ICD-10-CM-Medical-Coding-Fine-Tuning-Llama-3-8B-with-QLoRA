@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 from pathlib import Path
 
 import torch
 import wandb
 from datasets import load_from_disk, DatasetDict, load_dataset
-from transformers import TrainerCallback , TrainingArguments
+from huggingface_hub import whoami
+from transformers import TrainerCallback
 
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+from trl import SFTConfig, SFTTrainer
 
-from src.config import ModelConfig, DataConfig, TrainingConfig
+from src.config import LLAMA3_EOT_TOKEN, ModelConfig, DataConfig, TrainingConfig
 from src.modeling import get_tokenizer, load_model_for_training
 from src.preprocessing import build_dataset_report, materialize_clean_dataset, split_dataset
 from src.utils import (
@@ -73,6 +75,19 @@ def maybe_limit_dataset(dataset, max_samples: int | None):
         return dataset
     return dataset.select(range(min(len(dataset), max_samples)))
 
+
+def add_prompt_completion_columns(dataset):
+    """Expose prompt/completion fields for modern TRL completion-only loss."""
+
+    def convert(example):
+        return {
+            "prompt": example["prompt_text"],
+            "completion": f"{example['target_text']}{LLAMA3_EOT_TOKEN}",
+        }
+
+    return dataset.map(convert)
+
+
 def validate_response_template(tokenizer , sample_text:str, response_template:str):
     sample_ids = tokenizer(sample_text, add_special_tokens= False)["input_ids"]
     template_ids = tokenizer(response_template, add_special_tokens= False)["input_ids"]
@@ -86,45 +101,91 @@ def validate_response_template(tokenizer , sample_text:str, response_template:st
         "Completion-only loss masking would fail with the current prompt format."
     )
 
-def build_training_arguments(training_config : TrainingConfig) -> TrainingArguments:
+
+def resolve_hub_model_id(training_config: TrainingConfig) -> str | None:
+    """Resolve a checkpoint repository for Hugging Face Hub pushes."""
+
+    if not training_config.push_to_hub:
+        return None
+    if training_config.hub_model_id:
+        return training_config.hub_model_id
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if not token:
+        raise ValueError(
+            "--push_to_hub requires HF_TOKEN or HUGGING_FACE_HUB_TOKEN when --hub_model_id is not provided."
+        )
+    username = whoami(token=token)["name"]
+    return f"{username}/icd10-llama3-8b-qlora-checkpoints"
+
+
+def build_training_arguments(training_config : TrainingConfig, model_config: ModelConfig) -> SFTConfig:
     """Create Hugging Face training arguments for QLoRA fine-tuning."""
 
-    bf16_supported = bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
-    if not bf16_supported:
-        LOGGER.warning(
-            "Current GPU does not report bf16 support. Keeping 4-bit compute dtype at bf16 as requested, "
-            "but trainer mixed precision will use fp16 for compatibility."
-        )
     ensure_dir(training_config.output_dir)
-    return TrainingArguments(
-        output_dir=str(training_config.output_dir),
-        run_name=training_config.run_name,
-        num_train_epochs=training_config.num_train_epochs,
-        per_device_train_batch_size=training_config.per_device_train_batch_size,
-        per_device_eval_batch_size=training_config.per_device_eval_batch_size,
-        gradient_accumulation_steps=training_config.gradient_accumulation_steps,
-        learning_rate=training_config.learning_rate,
-        warmup_ratio=training_config.warmup_ratio,
-        weight_decay=training_config.weight_decay,
-        lr_scheduler_type=training_config.lr_scheduler_type,
-        optim=training_config.optim,
-        logging_steps=training_config.logging_steps,
-        evaluation_strategy="steps",
-        eval_steps=training_config.eval_steps,
-        save_strategy="steps",
-        save_steps=training_config.save_steps,
-        save_total_limit=training_config.save_total_limit,
-        max_grad_norm=training_config.max_grad_norm,
-        gradient_checkpointing=training_config.gradient_checkpointing,
-        fp16=not bf16_supported,
-        bf16=bf16_supported,
-        report_to=["wandb"] if training_config.report_to_wandb else [],
-        ddp_find_unused_parameters=training_config.ddp_find_unused_parameters,
-        dataloader_pin_memory=True,
-        remove_unused_columns=False,
-        logging_first_step=True,
-        group_by_length=True,
-        )
+    hub_model_id = resolve_hub_model_id(training_config)
+    hub_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    raw_args = {
+        "output_dir": str(training_config.output_dir),
+        "run_name": training_config.run_name,
+        "max_length": model_config.max_seq_length,
+        "max_seq_length": model_config.max_seq_length,
+        "completion_only_loss": True,
+        "packing": False,
+        "num_train_epochs": training_config.num_train_epochs,
+        "per_device_train_batch_size": training_config.per_device_train_batch_size,
+        "per_device_eval_batch_size": training_config.per_device_eval_batch_size,
+        "gradient_accumulation_steps": training_config.gradient_accumulation_steps,
+        "learning_rate": training_config.learning_rate,
+        "warmup_ratio": training_config.warmup_ratio,
+        "weight_decay": training_config.weight_decay,
+        "lr_scheduler_type": training_config.lr_scheduler_type,
+        "optim": training_config.optim,
+        "logging_steps": training_config.logging_steps,
+        "eval_strategy": "steps",
+        "evaluation_strategy": "steps",
+        "eval_steps": training_config.eval_steps,
+        "save_strategy": "steps",
+        "save_steps": training_config.save_steps,
+        "save_total_limit": training_config.save_total_limit,
+        "max_grad_norm": training_config.max_grad_norm,
+        "gradient_checkpointing": training_config.gradient_checkpointing,
+        "gradient_checkpointing_kwargs": {"use_reentrant": False},
+        "fp16": False,
+        "bf16": False,
+        "report_to": "wandb" if training_config.report_to_wandb else "none",
+        "push_to_hub": training_config.push_to_hub,
+        "hub_model_id": hub_model_id,
+        "hub_private_repo": training_config.hub_private_repo,
+        "hub_strategy": training_config.hub_strategy,
+        "hub_always_push": training_config.hub_always_push,
+        "hub_token": hub_token,
+        "ddp_find_unused_parameters": training_config.ddp_find_unused_parameters,
+        "dataloader_pin_memory": True,
+        "remove_unused_columns": True,
+        "logging_first_step": True,
+        "group_by_length": True,
+    }
+    supported_args = inspect.signature(SFTConfig).parameters
+    return SFTConfig(**{key: value for key, value in raw_args.items() if key in supported_args})
+
+
+def build_trainer(model, tokenizer, training_args, train_dataset, eval_dataset):
+    """Create SFTTrainer across TRL versions that use tokenizer or processing_class."""
+
+    trainer_kwargs = {
+        "model": model,
+        "args": training_args,
+        "train_dataset": train_dataset,
+        "eval_dataset": eval_dataset,
+        "callbacks": [TrainableParameterCallback()],
+    }
+    supported_args = inspect.signature(SFTTrainer).parameters
+    if "processing_class" in supported_args:
+        trainer_kwargs["processing_class"] = tokenizer
+    elif "tokenizer" in supported_args:
+        trainer_kwargs["tokenizer"] = tokenizer
+    return SFTTrainer(**trainer_kwargs)
 
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments for model training."""
@@ -167,6 +228,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb_project", type=str, default=train_defaults.wandb_project)
     parser.add_argument("--wandb_entity", type=str, default=train_defaults.wandb_entity)
     parser.add_argument("--no_wandb", action="store_true")
+    parser.add_argument("--push_to_hub", action="store_true")
+    parser.add_argument("--hub_model_id", type=str, default=train_defaults.hub_model_id)
+    parser.add_argument("--hub_private_repo", action=argparse.BooleanOptionalAction, default=train_defaults.hub_private_repo)
+    parser.add_argument("--hub_strategy", type=str, default=train_defaults.hub_strategy)
+    parser.add_argument("--hub_always_push", action="store_true")
     parser.add_argument("--log_level", type=str, default=train_defaults.log_level)
     return parser.parse_args()
 
@@ -215,6 +281,11 @@ def main() -> None:
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
         report_to_wandb=not args.no_wandb,
+        push_to_hub=args.push_to_hub,
+        hub_model_id=args.hub_model_id,
+        hub_private_repo=args.hub_private_repo,
+        hub_strategy=args.hub_strategy,
+        hub_always_push=args.hub_always_push,
         log_level=args.log_level,
     )
     seed_everything(data_config.seed)
@@ -223,6 +294,8 @@ def main() -> None:
     dataset_dict = load_or_prepare_dataset(model_config=model_config,data_config=data_config)
     train_dataset = maybe_limit_dataset(dataset_dict["train"], training_config.max_train_samples)
     eval_dataset = maybe_limit_dataset(dataset_dict["validation"], training_config.max_eval_samples)
+    train_dataset = add_prompt_completion_columns(train_dataset)
+    eval_dataset = add_prompt_completion_columns(eval_dataset)
     LOGGER.info("Training rows: %d | Validation rows: %d", len(train_dataset), len(eval_dataset))
 
     if training_config.report_to_wandb:
@@ -245,23 +318,13 @@ def main() -> None:
         raise ValueError("Training dataset is empty after filtering/limiting. Check preprocessing or --max_train_samples.")
     validate_response_template(tokenizer , train_dataset[0]["text"] , model_config.response_template)
     model = load_model_for_training(model_config)
-    data_collator = DataCollatorForCompletionOnlyLM(
-        response_template = model_config.response_template,
-        tokenizer = tokenizer,
-    )
-
-    training_args = build_training_arguments(training_config)
-    trainer = SFTTrainer(
+    training_args = build_training_arguments(training_config, model_config)
+    trainer = build_trainer(
         model=model,
-        args=training_args,
+        tokenizer=tokenizer,
+        training_args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        dataset_text_field="text",
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        max_seq_length=model_config.max_seq_length,
-        packing=False,
-        callbacks=[TrainableParameterCallback()],
     )
 
     resume_checkpoint = resolve_resume_checkpoint(training_config.output_dir, training_config.resume_from_checkpoint)
